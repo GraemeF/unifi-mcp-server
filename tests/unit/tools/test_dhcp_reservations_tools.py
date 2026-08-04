@@ -231,7 +231,91 @@ class TestUpdateDhcpReservation:
 
         assert result["fixed_ip"] == "192.168.30.99"
         put_body = client.put.call_args.kwargs["json_data"]
-        assert put_body == {"fixed_ip": "192.168.30.99"}
+        assert put_body == {"fixed_ip": "192.168.30.99", "use_fixedip": True}
+
+    @pytest.mark.asyncio
+    async def test_setting_an_ip_activates_the_reservation(
+        self, local_settings: MagicMock, sample_users: list[dict[str, Any]]
+    ) -> None:
+        """A known client with use_fixedip false must be switched on, not just given an IP.
+
+        A UniFi reservation is a rest/user entry with use_fixedip true AND a
+        fixed_ip. Writing only the address leaves the controller handing out a
+        dynamic lease, and create_dhcp_reservation cannot be used instead
+        because the controller rejects a known MAC with api.err.MacUsed.
+        """
+        laptop = sample_users[1]
+        assert laptop["use_fixedip"] is False
+
+        client = _mock_client({"data": sample_users})
+        client.put.return_value = {
+            "data": [{**laptop, "fixed_ip": "192.168.30.50", "use_fixedip": True}]
+        }
+
+        with patch("src.tools.dhcp_reservations.UniFiClient") as MockClient:
+            MockClient.return_value = client
+            result = await dhcp.update_dhcp_reservation(
+                mac="aa:bb:cc:dd:ee:02",
+                site_id="default",
+                settings=local_settings,
+                fixed_ip="192.168.30.50",
+                network_id="net-cameras",
+                confirm=True,
+            )
+
+        put_body = client.put.call_args.kwargs["json_data"]
+        assert put_body["use_fixedip"] is True
+        assert result["use_fixedip"] is True
+
+    @pytest.mark.asyncio
+    async def test_rename_alone_does_not_activate_a_reservation(
+        self, local_settings: MagicMock, sample_users: list[dict[str, Any]]
+    ) -> None:
+        """Only a fixed_ip implies intent to reserve; renaming must not pin an address."""
+        client = _mock_client({"data": sample_users})
+        client.put.return_value = {"data": [{**sample_users[1], "name": "Renamed"}]}
+
+        with patch("src.tools.dhcp_reservations.UniFiClient") as MockClient:
+            MockClient.return_value = client
+            await dhcp.update_dhcp_reservation(
+                mac="aa:bb:cc:dd:ee:02",
+                site_id="default",
+                settings=local_settings,
+                name="Renamed",
+                confirm=True,
+            )
+
+        put_body = client.put.call_args.kwargs["json_data"]
+        assert "use_fixedip" not in put_body
+
+    @pytest.mark.asyncio
+    async def test_result_reports_controller_state_not_an_optimistic_default(
+        self, local_settings: MagicMock, sample_users: list[dict[str, Any]]
+    ) -> None:
+        """A write the controller declined must not be reported as a success.
+
+        The controller omits use_fixedip from the PUT response when it did not
+        set it. Defaulting the returned value to True in that case makes a no-op
+        PUT indistinguishable from an applied one, which is how this went
+        unnoticed against a live controller.
+        """
+        response_without_the_flag = {k: v for k, v in sample_users[1].items() if k != "use_fixedip"}
+        client = _mock_client({"data": sample_users})
+        client.put.return_value = {
+            "data": [{**response_without_the_flag, "fixed_ip": "192.168.30.50"}]
+        }
+
+        with patch("src.tools.dhcp_reservations.UniFiClient") as MockClient:
+            MockClient.return_value = client
+            result = await dhcp.update_dhcp_reservation(
+                mac="aa:bb:cc:dd:ee:02",
+                site_id="default",
+                settings=local_settings,
+                fixed_ip="192.168.30.50",
+                confirm=True,
+            )
+
+        assert result["use_fixedip"] is False
 
     @pytest.mark.asyncio
     async def test_update_unknown_mac_raises(
