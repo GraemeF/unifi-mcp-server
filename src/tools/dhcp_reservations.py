@@ -288,7 +288,10 @@ async def update_dhcp_reservation(
 
         overrides: dict[str, Any] = {}
         if fixed_ip is not None:
+            # A reservation is use_fixedip=true AND fixed_ip; writing the
+            # address alone leaves the controller issuing a dynamic lease.
             overrides["fixed_ip"] = fixed_ip
+            overrides["use_fixedip"] = True
         if name is not None:
             overrides["name"] = name
         if network_id is not None:
@@ -326,7 +329,7 @@ async def update_dhcp_reservation(
             "name": data[0].get("name"),
             "fixed_ip": data[0].get("fixed_ip"),
             "network_id": data[0].get("network_id"),
-            "use_fixedip": data[0].get("use_fixedip", True),
+            "use_fixedip": data[0].get("use_fixedip", False),
         }
 
 
